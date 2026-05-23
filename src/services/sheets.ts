@@ -36,7 +36,7 @@ export async function appendToSheet(order: Order) {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId,
-      range: 'Orders!A:G',
+      range: 'Лист1!A:G',
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[
