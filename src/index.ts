@@ -10,6 +10,11 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
+// Keep-alive endpoint for Render
+app.get('/ping', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // YooKassa webhook endpoint
 app.post('/yookassa-webhook', handleYookassaWebhook);
 
@@ -23,6 +28,13 @@ async function start() {
       console.log(`Server is running on port ${PORT}`);
       await bot.api.setWebhook(`${WEBHOOK_URL}/webhook`);
       console.log(`Bot webhook set to ${WEBHOOK_URL}/webhook`);
+      
+      // Ping itself every 14 minutes to prevent Render free tier from sleeping
+      setInterval(() => {
+        fetch(`${WEBHOOK_URL}/ping`)
+          .then(() => console.log('Pinged self to stay awake'))
+          .catch(e => console.error('Ping failed:', e));
+      }, 14 * 60 * 1000);
     });
   } else {
     // Long polling mode (easier for local testing)
