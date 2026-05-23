@@ -33,21 +33,21 @@ export type Color = {
 };
 
 export const COLORS: Color[] = [
-  { id: 'sand',       name: 'Песочный',        available: true },
-  { id: 'terracotta', name: 'Терракота',        available: true },
-  { id: 'sage',       name: 'Шалфей',          available: true },
-  { id: 'fog',        name: 'Туман',            available: true },
-  { id: 'anthracite', name: 'Антрацит',         available: true },
-  { id: 'milk',       name: 'Молоко',           available: true },
-  { id: 'mustard',    name: 'Горчица',          available: true },
-  { id: 'dustyrose',  name: 'Пыльная роза',     available: true },
-  { id: 'indigo',     name: 'Индиго',           available: true },
-  { id: 'ivory',      name: 'Слоновая кость',   available: true },
-  { id: 'olive',      name: 'Оливковый',        available: true },
-  { id: 'caramel',    name: 'Карамель',         available: true },
-  { id: 'graphite',   name: 'Графит',           available: true },
-  { id: 'blush',      name: 'Румяный',          available: true },
-  { id: 'sky',        name: 'Небесный',         available: true },
+  { id: 'dark_chocolate', name: '1. Темный шоколад',  available: true },
+  { id: 'bright_yellow',  name: '2. Яркий желтый',   available: true },
+  { id: 'dark_green',     name: '3. Темный зеленый', available: true },
+  { id: 'butter',         name: '4. Сливочное масло',available: true },
+  { id: 'dark_gray',      name: '5. Темный серый',   available: true },
+  { id: 'light_blue',     name: '6. Голубой',        available: true },
+  { id: 'light_green',    name: '7. Светлый зеленый',available: true },
+  { id: 'milk_chocolate', name: '8. Молочный шоколад',available: true },
+  { id: 'blue',           name: '9. Синий',          available: true },
+  { id: 'gray',           name: '10. Серый',         available: true },
+  { id: 'beige',          name: '11. Бежевый',       available: true },
+  { id: 'pink',           name: '12. Розовый',       available: true },
+  { id: 'orange',         name: '13. Рыжий',         available: true },
+  { id: 'black',          name: '14. Черный',        available: true },
+  { id: 'lavender',       name: '15. Лаванда',       available: true },
 ];
 
 export function getMergedColors(): Color[] {
