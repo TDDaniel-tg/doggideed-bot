@@ -42,6 +42,19 @@ db.exec(`
     id TEXT PRIMARY KEY,
     role TEXT -- 'admin' or 'manager'
   );
+
+  CREATE TABLE IF NOT EXISTS content_blocks (
+    id TEXT PRIMARY KEY,
+    text TEXT,
+    photo_id TEXT,
+    button_text TEXT,
+    button_url TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
 `);
 
 export interface Order {
@@ -205,4 +218,43 @@ export function getAllStaffIds(): string[] {
   const users = getBotUsers().map(u => u.id);
   const envAdmins = (process.env.ADMIN_CHAT_ID || '').split(',').map((x: string) => x.trim()).filter(Boolean);
   return Array.from(new Set([...users, ...envAdmins]));
+}
+
+// Content Blocks
+export interface ContentBlock {
+  id: string;
+  text?: string;
+  photo_id?: string;
+  button_text?: string;
+  button_url?: string;
+}
+
+export function getContentBlock(id: string): ContentBlock | undefined {
+  const stmt = db.prepare("SELECT * FROM content_blocks WHERE id = ?");
+  return stmt.get(id) as any;
+}
+
+export function setContentBlock(id: string, text: string | null, photo_id: string | null, button_text: string | null, button_url: string | null) {
+  const stmt = db.prepare(`
+    INSERT INTO content_blocks (id, text, photo_id, button_text, button_url)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET 
+      text = excluded.text,
+      photo_id = excluded.photo_id,
+      button_text = excluded.button_text,
+      button_url = excluded.button_url
+  `);
+  stmt.run(id, text, photo_id, button_text, button_url);
+}
+
+// Settings
+export function getSetting(key: string, defaultValue: string = ''): string {
+  const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+  const row = stmt.get(key) as { value: string } | undefined;
+  return row ? row.value : defaultValue;
+}
+
+export function setSetting(key: string, value: string) {
+  const stmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+  stmt.run(key, value);
 }

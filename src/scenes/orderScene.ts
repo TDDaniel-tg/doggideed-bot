@@ -1,7 +1,7 @@
 import { Conversation } from '@grammyjs/conversations';
 import { InlineKeyboard, InputFile } from 'grammy';
 import { MODELS, BUBLIK_HEIGHTS, BUBLIK_VOLUMES, LEMON_SIZES, getMergedColors, getSetPrices } from '../config/catalog';
-import { createOrder } from '../db/database';
+import { createOrder, getContentBlock, getSetting } from '../db/database';
 import { generateOrderDescription } from '../services/gemini';
 import { createPayment } from '../services/yookassa';
 import crypto from 'crypto';
@@ -11,16 +11,35 @@ import { MyContext } from '../bot';
 
 type MyConversation = Conversation<MyContext>;
 
-async function safeReplyWithPhoto(ctx: MyContext, photoName: string, text: string, keyboard?: InlineKeyboard) {
-  const photoPath = path.resolve(process.cwd(), 'src/assets/images', photoName);
+async function safeReplyWithPhoto(ctx: MyContext, stepId: string, defaultPhotoName: string, defaultText: string, keyboard?: InlineKeyboard) {
+  const block = getContentBlock(stepId);
+  const text = block?.text || defaultText;
+  
+  let finalKeyboard = keyboard ? keyboard.clone() : new InlineKeyboard();
+  if (block?.button_text && block?.button_url) {
+    finalKeyboard.row().url(block.button_text, block.button_url);
+  }
+  // If keyboard has no buttons after adding link, make it undefined
+  const finalReplyMarkup = finalKeyboard.inline_keyboard.length > 0 ? finalKeyboard : undefined;
+
+  if (block?.photo_id) {
+    try {
+      await ctx.replyWithPhoto(block.photo_id, { caption: text, reply_markup: finalReplyMarkup });
+      return;
+    } catch (e) {
+      console.error(`Failed to send custom photo ${block.photo_id} for step ${stepId}`);
+    }
+  }
+
+  const photoPath = path.resolve(process.cwd(), 'src/assets/images', defaultPhotoName);
   try {
     if (fs.existsSync(photoPath)) {
-      await ctx.replyWithPhoto(new InputFile(photoPath), { caption: text, reply_markup: keyboard });
+      await ctx.replyWithPhoto(new InputFile(photoPath), { caption: text, reply_markup: finalReplyMarkup });
     } else {
-      await ctx.reply(text, { reply_markup: keyboard });
+      await ctx.reply(text, { reply_markup: finalReplyMarkup });
     }
   } catch (e) {
-    await ctx.reply(text, { reply_markup: keyboard });
+    await ctx.reply(text, { reply_markup: finalReplyMarkup });
   }
 }
 
@@ -33,7 +52,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
     .text(`2 комплекта (${price2} ₽)`, 'qty_2').row()
     .text('Отмена', 'cancel_order');
 
-  await safeReplyWithPhoto(ctx, 'quantity.jpg', 'Сколько комплектов вы хотите заказать?', qtyKeyboard);
+  await safeReplyWithPhoto(ctx, 'step_quantity', 'quantity.jpg', 'Сколько комплектов вы хотите заказать?', qtyKeyboard);
 
   const qtyCtx = await conversation.waitForCallbackQuery(/^(qty_1|qty_2|cancel_order)$/, {
     otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите количество комплектов.'); },
@@ -60,7 +79,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
     const modelKeyboard = new InlineKeyboard();
     MODELS.forEach(m => modelKeyboard.text(m.name, `model_${m.id}`).row());
     
-    await safeReplyWithPhoto(ctx, 'models.jpg', 'Выберите модель миски:', modelKeyboard);
+    await safeReplyWithPhoto(ctx, 'step_model', 'models.jpg', 'Выберите модель миски:', modelKeyboard);
     const modelCtx = await conversation.waitForCallbackQuery(/^model_/, {
       otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите модель.'); },
     });
@@ -73,7 +92,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       // --- Bublik Height ---
       const heightKeyboard = new InlineKeyboard();
       BUBLIK_HEIGHTS.forEach(h => heightKeyboard.text(h.name, `height_${h.id}`).row());
-      await safeReplyWithPhoto(ctx, 'bublik_height.jpg', 'Выберите высоту подставки:', heightKeyboard);
+      await safeReplyWithPhoto(ctx, 'step_bublik_height', 'bublik_height.jpg', 'Выберите высоту подставки:', heightKeyboard);
       const heightCtx = await conversation.waitForCallbackQuery(/^height_/, {
         otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите высоту.'); },
       });
@@ -88,7 +107,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
         if (v.id === '1700' && heightId === '5rings') return; // exclude 1700 for 5 rings
         volumeKeyboard.text(v.name, `volume_${v.id}`).row();
       });
-      await safeReplyWithPhoto(ctx, 'bublik_volume.jpg', 'Выберите объём чаши:', volumeKeyboard);
+      await safeReplyWithPhoto(ctx, 'step_bublik_volume', 'bublik_volume.jpg', 'Выберите объём чаши:', volumeKeyboard);
       const volumeCtx = await conversation.waitForCallbackQuery(/^volume_/, {
         otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите объём.'); },
       });
@@ -110,7 +129,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
         if (rowCount % 2 === 0) colorKeyboard.row();
       });
 
-      await safeReplyWithPhoto(ctx, 'palette.jpg', 'Выберите цвет комплекта:', colorKeyboard);
+      await safeReplyWithPhoto(ctx, 'step_palette', 'palette.jpg', 'Выберите цвет комплекта:', colorKeyboard);
       let colorId = '';
       while (true) {
         const colorCtx = await conversation.waitForCallbackQuery(/^(color_|color_unav)/, {
@@ -138,7 +157,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       // --- Lemon Size ---
       const sizeKeyboard = new InlineKeyboard();
       LEMON_SIZES.forEach(s => sizeKeyboard.text(s.name, `size_${s.id}`).row());
-      await safeReplyWithPhoto(ctx, 'lemon_size.jpg', 'Выберите размер (высота + объём):', sizeKeyboard);
+      await safeReplyWithPhoto(ctx, 'step_lemon_size', 'lemon_size.jpg', 'Выберите размер (высота + объём):', sizeKeyboard);
       const sizeCtx = await conversation.waitForCallbackQuery(/^size_/, {
         otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите размер.'); },
       });
@@ -163,7 +182,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       };
 
       // --- Lemon Top Color ---
-      await safeReplyWithPhoto(ctx, 'palette.jpg', 'Выберите цвет ВЕРХА:', createColorKeyboard('top'));
+      await safeReplyWithPhoto(ctx, 'step_lemon_top_color', 'palette.jpg', 'Выберите цвет ВЕРХА:', createColorKeyboard('top'));
       let topColorId = '';
       while (true) {
         const topColorCtx = await conversation.waitForCallbackQuery(/^(top_.+|top_unav)$/, {
@@ -182,7 +201,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       const topColor = colors.find(c => c.id === topColorId)!;
 
       // --- Lemon Bottom Color ---
-      await safeReplyWithPhoto(ctx, 'palette.jpg', 'Выберите цвет НИЗА:', createColorKeyboard('bot'));
+      await safeReplyWithPhoto(ctx, 'step_lemon_bot_color', 'palette.jpg', 'Выберите цвет НИЗА:', createColorKeyboard('bot'));
       let botColorId = '';
       while (true) {
         const botColorCtx = await conversation.waitForCallbackQuery(/^(bot_.+|bot_unav)$/, {
@@ -239,23 +258,36 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
     itemsJson: JSON.stringify(items),
   });
 
-  const me = await ctx.api.getMe();
-  const { url: paymentUrl, paymentId } = await createPayment({
-    id: orderId,
-    userId,
-    username,
-    model: quantity > 1 ? 'Сборный заказ (2 шт)' : items[0].model,
-    height: items[0].height || items[0].size || '',
-    volume: items[0].volume || '',
-    color: items[0].color || `${items[0].topColor}/${items[0].bottomColor}`,
-    totalPrice,
-    status: 'pending'
-  }, me.username);
-
-  const paymentKeyboard = new InlineKeyboard()
-    .url(`Оплатить ${totalPrice} ₽`, paymentUrl).row()
-    .text('Я оплатил ✅', `check_payment_${paymentId}_${orderId}`).row()
-    .text('Изменить заказ', 'restart_order');
-
-  await safeReplyWithPhoto(ctx, 'summary.jpg', summaryText, paymentKeyboard);
+  const paymentMode = getSetting('payment_mode', 'yookassa');
+  
+  if (paymentMode === 'manual') {
+    const manualDetails = getSetting('manual_payment_details', 'Реквизиты для перевода пока не указаны.');
+    summaryText += `\n\n💳 **Реквизиты для перевода:**\n${manualDetails}`;
+    
+    const paymentKeyboard = new InlineKeyboard()
+      .text('Я оплатил ✅', `manual_paid_${orderId}`).row()
+      .text('Изменить заказ', 'restart_order');
+      
+    await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, paymentKeyboard);
+  } else {
+    const me = await ctx.api.getMe();
+    const { url: paymentUrl, paymentId } = await createPayment({
+      id: orderId,
+      userId,
+      username,
+      model: quantity > 1 ? 'Сборный заказ (2 шт)' : items[0].model,
+      height: items[0].height || items[0].size || '',
+      volume: items[0].volume || '',
+      color: items[0].color || `${items[0].topColor}/${items[0].bottomColor}`,
+      totalPrice,
+      status: 'pending'
+    }, me.username);
+  
+    const paymentKeyboard = new InlineKeyboard()
+      .url(`Оплатить ${totalPrice} ₽`, paymentUrl).row()
+      .text('Я оплатил ✅', `check_payment_${paymentId}_${orderId}`).row()
+      .text('Изменить заказ', 'restart_order');
+  
+    await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, paymentKeyboard);
+  }
 }

@@ -8,6 +8,8 @@ function buildAdminMainKeyboard() {
     .text('🎨 Управление цветами', 'admin_colors').row()
     .text('📦 Управление моделями', 'admin_models').row()
     .text('💰 Управление ценами', 'admin_prices').row()
+    .text('📝 Контент и Тексты', 'admin_content').row()
+    .text('💳 Настройки оплаты', 'admin_payment').row()
     .text('👥 Управление доступом', 'admin_users').row()
     .text('📋 Последние заказы', 'admin_recent_orders').row()
     .text('📊 Статистика', 'admin_stats');
@@ -51,6 +53,39 @@ function buildPricesKeyboard() {
   const keyboard = new InlineKeyboard();
   keyboard.text(`Изменить цену 1 комплекта (${price1}₽)`, `admin_set_price_global_set_1`).row();
   keyboard.text(`Изменить цену 2 комплектов (${price2}₽)`, `admin_set_price_global_set_2`).row();
+  keyboard.text('🔙 Назад', 'admin_main');
+  return keyboard;
+}
+
+function buildContentKeyboard() {
+  const keyboard = new InlineKeyboard();
+  const steps = [
+    { id: 'step_quantity', name: 'Шаг 1: Количество' },
+    { id: 'step_model', name: 'Шаг 2: Выбор модели' },
+    { id: 'step_bublik_height', name: 'Бублик: Высота' },
+    { id: 'step_bublik_volume', name: 'Бублик: Объём' },
+    { id: 'step_palette', name: 'Бублик: Цвет' },
+    { id: 'step_lemon_size', name: 'Лимон: Размер' },
+    { id: 'step_lemon_top_color', name: 'Лимон: Цвет верха' },
+    { id: 'step_lemon_bot_color', name: 'Лимон: Цвет низа' },
+    { id: 'step_summary', name: 'Финальный шаг: Оплата' },
+  ];
+  
+  steps.forEach(s => {
+    keyboard.text(`Редактировать: ${s.name}`, `admin_edit_content_${s.id}`).row();
+  });
+  
+  keyboard.text('🔙 Назад', 'admin_main');
+  return keyboard;
+}
+
+function buildPaymentKeyboard() {
+  const paymentMode = require('../db/database').getSetting('payment_mode', 'yookassa');
+  const keyboard = new InlineKeyboard();
+  keyboard.text(`Режим: ${paymentMode === 'yookassa' ? '🟢 ЮKassa' : '🔴 Реквизиты'} (изменить)`, 'admin_toggle_payment').row();
+  if (paymentMode === 'manual') {
+    keyboard.text('Изменить реквизиты', 'admin_edit_requisites').row();
+  }
   keyboard.text('🔙 Назад', 'admin_main');
   return keyboard;
 }
@@ -107,6 +142,36 @@ export function setupAdminHandlers(bot: any) {
     await ctx.editMessageText('💰 Управление ценами:', {
       reply_markup: buildPricesKeyboard()
     });
+  });
+
+  bot.callbackQuery('admin_content', adminMiddleware, async (ctx: any) => {
+    await ctx.editMessageText('📝 Управление текстами, фотографиями и кнопками:', {
+      reply_markup: buildContentKeyboard()
+    });
+  });
+
+  bot.callbackQuery('admin_payment', adminMiddleware, async (ctx: any) => {
+    await ctx.editMessageText('💳 Настройки оплаты:', {
+      reply_markup: buildPaymentKeyboard()
+    });
+  });
+
+  bot.callbackQuery('admin_toggle_payment', adminMiddleware, async (ctx: any) => {
+    const current = require('../db/database').getSetting('payment_mode', 'yookassa');
+    require('../db/database').setSetting('payment_mode', current === 'yookassa' ? 'manual' : 'yookassa');
+    await ctx.editMessageReplyMarkup({ reply_markup: buildPaymentKeyboard() });
+    await ctx.answerCallbackQuery('Режим оплаты изменён');
+  });
+
+  bot.callbackQuery('admin_edit_requisites', adminMiddleware, async (ctx: any) => {
+    await ctx.answerCallbackQuery();
+    await ctx.conversation.enter('adminPaymentSettingsScene');
+  });
+
+  bot.callbackQuery(/^admin_edit_content_(.+)$/, adminMiddleware, async (ctx: any) => {
+    await ctx.answerCallbackQuery();
+    adminEditState.set(ctx.from.id, { type: 'content', id: ctx.match[1] });
+    await ctx.conversation.enter('adminEditContentScene');
   });
 
 

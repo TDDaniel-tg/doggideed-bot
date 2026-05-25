@@ -20,6 +20,11 @@ app.post('/yookassa-webhook', handleYookassaWebhook);
 
 // Start Server & Bot
 async function start() {
+  await bot.api.setMyCommands([
+    { command: 'start', description: 'Начать заказ' },
+    { command: 'admin', description: 'Админ-панель (только для админов)' }
+  ]);
+
   if (WEBHOOK_URL) {
     // Webhook mode
     app.use('/webhook', webhookCallback(bot, 'express'));
