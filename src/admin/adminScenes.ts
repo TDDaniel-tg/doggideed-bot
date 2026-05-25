@@ -114,7 +114,7 @@ export async function adminAddUserScene(conversation: MyConversation, ctx: MyCon
     }
 
     newUserId = response.message?.text?.trim() || '';
-    if (!/^\\d+$/.test(newUserId)) {
+    if (!/^\d+$/.test(newUserId)) {
       if (response.callbackQuery) {
         await response.answerCallbackQuery('Сначала завершите текущее действие!');
       } else {
