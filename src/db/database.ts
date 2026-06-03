@@ -1,61 +1,9 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import { Pool } from 'pg';
 
-const dbPath = path.resolve(process.cwd(), 'doggideed.db');
-const db = new Database(dbPath);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS orders (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    username TEXT,
-    model TEXT,
-    height TEXT,
-    volume TEXT,
-    color TEXT,
-    total_price INTEGER,
-    status TEXT DEFAULT 'pending',
-    items_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS catalog_overrides (
-    type TEXT, -- 'color' or 'model'
-    item_id TEXT,
-    available INTEGER,
-    PRIMARY KEY (type, item_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS custom_colors (
-    id TEXT PRIMARY KEY,
-    name TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS custom_prices (
-    item_type TEXT, -- 'height' or 'volume_model'
-    item_id TEXT, -- e.g. 'medium' or '400_classic'
-    price INTEGER,
-    PRIMARY KEY (item_type, item_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS bot_users (
-    id TEXT PRIMARY KEY,
-    role TEXT -- 'admin' or 'manager'
-  );
-
-  CREATE TABLE IF NOT EXISTS content_blocks (
-    id TEXT PRIMARY KEY,
-    text TEXT,
-    photo_id TEXT,
-    button_text TEXT,
-    button_url TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-`);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 export interface Order {
   id: string;
@@ -70,191 +18,254 @@ export interface Order {
   status: string;
 }
 
-export function createOrder(order: Partial<Order>) {
-  // If the column doesn't exist yet, we add it dynamically (safe for existing DBs)
-  try {
-    db.exec('ALTER TABLE orders ADD COLUMN items_json TEXT');
-  } catch (e) {
-    // Column might already exist
-  }
-
-  const stmt = db.prepare(`
-    INSERT INTO orders (id, user_id, username, model, height, volume, color, total_price, items_json)
-    VALUES (@id, @userId, @username, @model, @height, @volume, @color, @totalPrice, @itemsJson)
-  `);
-  stmt.run({
-    id: order.id,
-    userId: order.userId,
-    username: order.username || null,
-    model: order.model || null,
-    height: order.height || null,
-    volume: order.volume || null,
-    color: order.color || null,
-    totalPrice: order.totalPrice,
-    itemsJson: order.itemsJson || null,
-  });
-}
-
-export function getOrder(id: string): Order | undefined {
-  const stmt = db.prepare('SELECT * FROM orders WHERE id = ?');
-  const row = stmt.get(id) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    userId: row.user_id,
-    username: row.username,
-    model: row.model,
-    height: row.height,
-    volume: row.volume,
-    color: row.color,
-    itemsJson: row.items_json,
-    totalPrice: row.total_price,
-    status: row.status,
-  };
-}
-
-export function markPaid(id: string) {
-  const stmt = db.prepare("UPDATE orders SET status = 'paid' WHERE id = ?");
-  stmt.run(id);
-}
-
-export function getRecentPaidOrders(limit: number = 10): Order[] {
-  const stmt = db.prepare("SELECT * FROM orders WHERE status = 'paid' ORDER BY created_at DESC LIMIT ?");
-  return stmt.all(limit).map((row: any) => ({
-    id: row.id,
-    userId: row.user_id,
-    username: row.username,
-    model: row.model,
-    height: row.height,
-    volume: row.volume,
-    color: row.color,
-    itemsJson: row.items_json,
-    totalPrice: row.total_price,
-    status: row.status,
-  }));
-}
-
-export function getStats() {
-  const stmt = db.prepare("SELECT COUNT(*) as total_orders, SUM(total_price) as total_revenue FROM orders WHERE status = 'paid'");
-  const stats = stmt.get() as { total_orders: number, total_revenue: number };
-  return {
-    totalOrders: stats.total_orders,
-    totalRevenue: stats.total_revenue || 0,
-  };
-}
-
-export function getOverrides() {
-  const stmt = db.prepare("SELECT * FROM catalog_overrides");
-  return stmt.all();
-}
-
-export function setOverride(type: 'color' | 'model', itemId: string, available: boolean) {
-  const stmt = db.prepare(`
-    INSERT INTO catalog_overrides (type, item_id, available)
-    VALUES (@type, @itemId, @available)
-    ON CONFLICT(type, item_id) DO UPDATE SET available = excluded.available
-  `);
-  stmt.run({ type, itemId, available: available ? 1 : 0 });
-}
-
-export function isItemAvailable(type: 'color' | 'model', itemId: string, defaultAvailable: boolean): boolean {
-  const stmt = db.prepare("SELECT available FROM catalog_overrides WHERE type = ? AND item_id = ?");
-  const row = stmt.get(type, itemId) as { available: number } | undefined;
-  if (row !== undefined) {
-    return row.available === 1;
-  }
-  return defaultAvailable;
-}
-
-export function getCustomColors(): { id: string, name: string }[] {
-  return db.prepare("SELECT * FROM custom_colors").all() as any;
-}
-
-export function addCustomColor(id: string, name: string) {
-  const stmt = db.prepare("INSERT OR REPLACE INTO custom_colors (id, name) VALUES (?, ?)");
-  stmt.run(id, name);
-}
-
-export function deleteCustomColor(id: string) {
-  db.prepare("DELETE FROM custom_colors WHERE id = ?").run(id);
-  db.prepare("DELETE FROM catalog_overrides WHERE type = 'color' AND item_id = ?").run(id);
-}
-
-export function getCustomPrices(): { item_type: string, item_id: string, price: number }[] {
-  return db.prepare("SELECT * FROM custom_prices").all() as any;
-}
-
-export function setCustomPrice(item_type: string, item_id: string, price: number) {
-  const stmt = db.prepare("INSERT OR REPLACE INTO custom_prices (item_type, item_id, price) VALUES (?, ?, ?)");
-  stmt.run(item_type, item_id, price);
-}
-
-// Access Control
-export function getBotUsers(): { id: string, role: string }[] {
-  return db.prepare("SELECT * FROM bot_users").all() as any;
-}
-
-export function addBotUser(id: string, role: 'admin' | 'manager') {
-  const stmt = db.prepare("INSERT OR REPLACE INTO bot_users (id, role) VALUES (?, ?)");
-  stmt.run(id, role);
-}
-
-export function removeBotUser(id: string) {
-  db.prepare("DELETE FROM bot_users WHERE id = ?").run(id);
-}
-
-export function getUserRole(id: string): 'admin' | 'manager' | null {
-  const row = db.prepare("SELECT role FROM bot_users WHERE id = ?").get(id) as any;
-  if (!row) {
-    // Check .env fallback
-    const envAdmins = (process.env.ADMIN_CHAT_ID || '').split(',').map((x: string) => x.trim());
-    if (envAdmins.includes(id.toString())) return 'admin';
-    return null;
-  }
-  return row.role;
-}
-
-export function getAllStaffIds(): string[] {
-  const users = getBotUsers().map(u => u.id);
-  const envAdmins = (process.env.ADMIN_CHAT_ID || '').split(',').map((x: string) => x.trim()).filter(Boolean);
-  return Array.from(new Set([...users, ...envAdmins]));
-}
-
-// Content Blocks
 export interface ContentBlock {
   id: string;
   text?: string;
-  photo_id?: string;
+  photo_id?: string; // Comma-separated list of photo IDs
   button_text?: string;
   button_url?: string;
 }
 
+const cache = {
+  orders: new Map<string, Order>(),
+  catalog_overrides: new Map<string, number>(),
+  custom_colors: new Map<string, string>(),
+  custom_prices: new Map<string, number>(),
+  bot_users: new Map<string, string>(),
+  content_blocks: new Map<string, ContentBlock>(),
+  settings: new Map<string, string>(),
+  ordersArray: [] as Order[] // for chronological queries
+};
+
+export async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      username TEXT,
+      model TEXT,
+      height TEXT,
+      volume TEXT,
+      color TEXT,
+      total_price INTEGER,
+      status TEXT DEFAULT 'pending',
+      items_json TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS catalog_overrides (
+      type TEXT,
+      item_id TEXT,
+      available INTEGER,
+      PRIMARY KEY (type, item_id)
+    );
+    CREATE TABLE IF NOT EXISTS custom_colors (
+      id TEXT PRIMARY KEY,
+      name TEXT
+    );
+    CREATE TABLE IF NOT EXISTS custom_prices (
+      item_type TEXT,
+      item_id TEXT,
+      price INTEGER,
+      PRIMARY KEY (item_type, item_id)
+    );
+    CREATE TABLE IF NOT EXISTS bot_users (
+      id TEXT PRIMARY KEY,
+      role TEXT
+    );
+    CREATE TABLE IF NOT EXISTS content_blocks (
+      id TEXT PRIMARY KEY,
+      text TEXT,
+      photo_id TEXT,
+      button_text TEXT,
+      button_url TEXT
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+  const orders = await pool.query('SELECT * FROM orders ORDER BY created_at ASC');
+  orders.rows.forEach(r => {
+    const o = {
+      id: r.id, userId: Number(r.user_id), username: r.username, model: r.model,
+      height: r.height, volume: r.volume, color: r.color, itemsJson: r.items_json,
+      totalPrice: r.total_price, status: r.status
+    };
+    cache.orders.set(r.id, o);
+    cache.ordersArray.push(o);
+  });
+
+  const overrides = await pool.query('SELECT * FROM catalog_overrides');
+  overrides.rows.forEach(r => cache.catalog_overrides.set(`${r.type}_${r.item_id}`, r.available));
+
+  const colors = await pool.query('SELECT * FROM custom_colors');
+  colors.rows.forEach(r => cache.custom_colors.set(r.id, r.name));
+
+  const prices = await pool.query('SELECT * FROM custom_prices');
+  prices.rows.forEach(r => cache.custom_prices.set(`${r.item_type}_${r.item_id}`, r.price));
+
+  const users = await pool.query('SELECT * FROM bot_users');
+  users.rows.forEach(r => cache.bot_users.set(r.id, r.role));
+
+  const blocks = await pool.query('SELECT * FROM content_blocks');
+  blocks.rows.forEach(r => cache.content_blocks.set(r.id, {
+    id: r.id, text: r.text, photo_id: r.photo_id, button_text: r.button_text, button_url: r.button_url
+  }));
+
+  const settings = await pool.query('SELECT * FROM settings');
+  settings.rows.forEach(r => cache.settings.set(r.key, r.value));
+}
+
+export function createOrder(order: Partial<Order>) {
+  const o = {
+    id: order.id!, userId: order.userId!, username: order.username, model: order.model || '',
+    height: order.height, volume: order.volume, color: order.color, itemsJson: order.itemsJson,
+    totalPrice: order.totalPrice || 0, status: order.status || 'pending'
+  };
+  cache.orders.set(o.id, o);
+  cache.ordersArray.push(o);
+
+  pool.query(`
+    INSERT INTO orders (id, user_id, username, model, height, volume, color, total_price, items_json)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  `, [o.id, o.userId, o.username, o.model, o.height, o.volume, o.color, o.totalPrice, o.itemsJson]).catch(console.error);
+}
+
+export function getOrder(id: string): Order | undefined {
+  return cache.orders.get(id);
+}
+
+export function markPaid(id: string) {
+  const o = cache.orders.get(id);
+  if (o) o.status = 'paid';
+  pool.query("UPDATE orders SET status = 'paid' WHERE id = $1", [id]).catch(console.error);
+}
+
+export function getRecentPaidOrders(limit: number = 10): Order[] {
+  return cache.ordersArray.filter(o => o.status === 'paid').slice(-limit).reverse();
+}
+
+export function getStats() {
+  const paid = cache.ordersArray.filter(o => o.status === 'paid');
+  return {
+    totalOrders: paid.length,
+    totalRevenue: paid.reduce((sum, o) => sum + o.totalPrice, 0)
+  };
+}
+
+export function getOverrides() {
+  return Array.from(cache.catalog_overrides.entries()).map(([k, v]) => {
+    const [type, item_id] = k.split('_');
+    return { type, item_id, available: v };
+  });
+}
+
+export function setOverride(type: 'color' | 'model', itemId: string, available: boolean) {
+  cache.catalog_overrides.set(`${type}_${itemId}`, available ? 1 : 0);
+  pool.query(`
+    INSERT INTO catalog_overrides (type, item_id, available)
+    VALUES ($1, $2, $3)
+    ON CONFLICT(type, item_id) DO UPDATE SET available = EXCLUDED.available
+  `, [type, itemId, available ? 1 : 0]).catch(console.error);
+}
+
+export function isItemAvailable(type: 'color' | 'model', itemId: string, defaultAvailable: boolean): boolean {
+  const val = cache.catalog_overrides.get(`${type}_${itemId}`);
+  if (val !== undefined) return val === 1;
+  return defaultAvailable;
+}
+
+export function getCustomColors(): { id: string, name: string }[] {
+  return Array.from(cache.custom_colors.entries()).map(([id, name]) => ({ id, name }));
+}
+
+export function addCustomColor(id: string, name: string) {
+  cache.custom_colors.set(id, name);
+  pool.query(`
+    INSERT INTO custom_colors (id, name) VALUES ($1, $2)
+    ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name
+  `, [id, name]).catch(console.error);
+}
+
+export function deleteCustomColor(id: string) {
+  cache.custom_colors.delete(id);
+  cache.catalog_overrides.delete(`color_${id}`);
+  pool.query("DELETE FROM custom_colors WHERE id = $1", [id]).catch(console.error);
+  pool.query("DELETE FROM catalog_overrides WHERE type = 'color' AND item_id = $1", [id]).catch(console.error);
+}
+
+export function getCustomPrices(): { item_type: string, item_id: string, price: number }[] {
+  return Array.from(cache.custom_prices.entries()).map(([k, price]) => {
+    const [item_type, item_id] = k.split('_');
+    return { item_type, item_id, price };
+  });
+}
+
+export function setCustomPrice(item_type: string, item_id: string, price: number) {
+  cache.custom_prices.set(`${item_type}_${item_id}`, price);
+  pool.query(`
+    INSERT INTO custom_prices (item_type, item_id, price) VALUES ($1, $2, $3)
+    ON CONFLICT(item_type, item_id) DO UPDATE SET price = EXCLUDED.price
+  `, [item_type, item_id, price]).catch(console.error);
+}
+
+export function getBotUsers(): { id: string, role: string }[] {
+  return Array.from(cache.bot_users.entries()).map(([id, role]) => ({ id, role }));
+}
+
+export function addBotUser(id: string, role: 'admin' | 'manager') {
+  cache.bot_users.set(id, role);
+  pool.query(`
+    INSERT INTO bot_users (id, role) VALUES ($1, $2)
+    ON CONFLICT(id) DO UPDATE SET role = EXCLUDED.role
+  `, [id, role]).catch(console.error);
+}
+
+export function removeBotUser(id: string) {
+  cache.bot_users.delete(id);
+  pool.query("DELETE FROM bot_users WHERE id = $1", [id]).catch(console.error);
+}
+
+export function getUserRole(id: string): 'admin' | 'manager' | null {
+  const role = cache.bot_users.get(id);
+  if (role) return role as any;
+  const envAdmins = (process.env.ADMIN_CHAT_ID || '').split(',').map((x: string) => x.trim());
+  if (envAdmins.includes(id.toString())) return 'admin';
+  return null;
+}
+
+export function getAllStaffIds(): string[] {
+  const users = Array.from(cache.bot_users.keys());
+  const envAdmins = (process.env.ADMIN_CHAT_ID || '').split(',').map((x: string) => x.trim()).filter(Boolean);
+  return Array.from(new Set([...users, ...envAdmins]));
+}
+
 export function getContentBlock(id: string): ContentBlock | undefined {
-  const stmt = db.prepare("SELECT * FROM content_blocks WHERE id = ?");
-  return stmt.get(id) as any;
+  return cache.content_blocks.get(id);
 }
 
 export function setContentBlock(id: string, text: string | null, photo_id: string | null, button_text: string | null, button_url: string | null) {
-  const stmt = db.prepare(`
+  cache.content_blocks.set(id, { id, text: text || undefined, photo_id: photo_id || undefined, button_text: button_text || undefined, button_url: button_url || undefined });
+  pool.query(`
     INSERT INTO content_blocks (id, text, photo_id, button_text, button_url)
-    VALUES (?, ?, ?, ?, ?)
+    VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT(id) DO UPDATE SET 
-      text = excluded.text,
-      photo_id = excluded.photo_id,
-      button_text = excluded.button_text,
-      button_url = excluded.button_url
-  `);
-  stmt.run(id, text, photo_id, button_text, button_url);
+      text = EXCLUDED.text,
+      photo_id = EXCLUDED.photo_id,
+      button_text = EXCLUDED.button_text,
+      button_url = EXCLUDED.button_url
+  `, [id, text, photo_id, button_text, button_url]).catch(console.error);
 }
 
-// Settings
 export function getSetting(key: string, defaultValue: string = ''): string {
-  const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
-  const row = stmt.get(key) as { value: string } | undefined;
-  return row ? row.value : defaultValue;
+  return cache.settings.get(key) || defaultValue;
 }
 
 export function setSetting(key: string, value: string) {
-  const stmt = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
-  stmt.run(key, value);
+  cache.settings.set(key, value);
+  pool.query(`
+    INSERT INTO settings (key, value) VALUES ($1, $2)
+    ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+  `, [key, value]).catch(console.error);
 }

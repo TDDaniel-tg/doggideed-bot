@@ -19,13 +19,24 @@ async function safeReplyWithPhoto(ctx: MyContext, stepId: string, defaultPhotoNa
   if (block?.button_text && block?.button_url) {
     finalKeyboard.row().url(block.button_text, block.button_url);
   }
-  // If keyboard has no buttons after adding link, make it undefined
   const finalReplyMarkup = finalKeyboard.inline_keyboard.length > 0 ? finalKeyboard : undefined;
 
   if (block?.photo_id) {
+    const photoIds = block.photo_id.split(',');
     try {
-      await ctx.replyWithPhoto(block.photo_id, { caption: text, reply_markup: finalReplyMarkup });
-      return;
+      if (photoIds.length > 1) {
+        await ctx.replyWithMediaGroup(
+          photoIds.map(id => ({
+            type: 'photo',
+            media: id
+          }))
+        );
+        await ctx.reply(text, { reply_markup: finalReplyMarkup });
+        return;
+      } else {
+        await ctx.replyWithPhoto(photoIds[0], { caption: text, reply_markup: finalReplyMarkup });
+        return;
+      }
     } catch (e) {
       console.error(`Failed to send custom photo ${block.photo_id} for step ${stepId}`);
     }
@@ -45,249 +56,253 @@ async function safeReplyWithPhoto(ctx: MyContext, stepId: string, defaultPhotoNa
 
 export async function orderScene(conversation: MyConversation, ctx: MyContext) {
   const { price1, price2 } = getSetPrices();
-
-  // --- Step 0: Quantity ---
-  const qtyKeyboard = new InlineKeyboard()
-    .text(`1 комплект (${price1} ₽)`, 'qty_1').row()
-    .text(`2 комплекта (${price2} ₽)`, 'qty_2').row()
-    .text('Отмена', 'cancel_order');
-
-  await safeReplyWithPhoto(ctx, 'step_quantity', 'quantity.jpg', 'Сколько комплектов вы хотите заказать?', qtyKeyboard);
-
-  const qtyCtx = await conversation.waitForCallbackQuery(/^(qty_1|qty_2|cancel_order)$/, {
-    otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите количество комплектов.'); },
-  });
-  
-  if (qtyCtx.callbackQuery.data === 'cancel_order') {
-    await qtyCtx.answerCallbackQuery();
-    await qtyCtx.editMessageCaption({ caption: 'Заказ отменен.' }).catch(()=>qtyCtx.editMessageText('Заказ отменен.'));
-    return;
-  }
-
-  const quantity = qtyCtx.callbackQuery.data === 'qty_1' ? 1 : 2;
-  const totalPrice = quantity === 1 ? price1 : price2;
-  await qtyCtx.answerCallbackQuery();
-  await qtyCtx.editMessageCaption({ caption: `✅ Выбрано комплектов: ${quantity}` }).catch(()=>qtyCtx.editMessageText(`✅ Выбрано комплектов: ${quantity}`));
-
-  const items: any[] = [];
   const colors = getMergedColors();
 
-  for (let i = 1; i <= quantity; i++) {
-    await ctx.reply(`🛠 Сборка комплекта №${i}`);
-    
-    // --- Model ---
-    const modelKeyboard = new InlineKeyboard();
-    MODELS.forEach(m => modelKeyboard.text(m.name, `model_${m.id}`).row());
-    
-    await safeReplyWithPhoto(ctx, 'step_model', 'models.jpg', 'Выберите модель миски:', modelKeyboard);
-    const modelCtx = await conversation.waitForCallbackQuery(/^model_/, {
-      otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите модель.'); },
-    });
-    const modelId = modelCtx.callbackQuery.data.replace('model_', '');
-    const model = MODELS.find(m => m.id === modelId)!;
-    await modelCtx.answerCallbackQuery();
-    await modelCtx.editMessageCaption({ caption: `✅ Модель: ${model.name}` }).catch(()=>modelCtx.editMessageText(`✅ Модель: ${model.name}`));
+  type Step = 'qty' | 'model' | 'bublik_height' | 'bublik_volume' | 'bublik_color' | 'lemon_size' | 'lemon_top' | 'lemon_bot' | 'summary';
+  
+  let step: Step = 'qty';
+  let currentItem = 0;
+  let quantity = 1;
+  let totalPrice = price1;
+  const items: any[] = [{}, {}];
 
-    if (modelId === 'bublik') {
-      // --- Bublik Height ---
-      const heightKeyboard = new InlineKeyboard();
-      BUBLIK_HEIGHTS.forEach(h => heightKeyboard.text(h.name, `height_${h.id}`).row());
-      await safeReplyWithPhoto(ctx, 'step_bublik_height', 'bublik_height.jpg', 'Выберите высоту подставки:', heightKeyboard);
-      const heightCtx = await conversation.waitForCallbackQuery(/^height_/, {
-        otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите высоту.'); },
-      });
-      const heightId = heightCtx.callbackQuery.data.replace('height_', '');
-      const height = BUBLIK_HEIGHTS.find(h => h.id === heightId)!;
-      await heightCtx.answerCallbackQuery();
-      await heightCtx.editMessageCaption({ caption: `✅ Высота: ${height.name}` }).catch(()=>heightCtx.editMessageText(`✅ Высота: ${height.name}`));
+  while (true) {
+    if (step === 'qty') {
+      const kb = new InlineKeyboard()
+        .text(`1 комплект (${price1} ₽)`, 'qty_1').row()
+        .text(`2 комплекта (${price2} ₽)`, 'qty_2').row()
+        .text('Отмена', 'cancel_order');
+      await safeReplyWithPhoto(ctx, 'step_quantity', 'quantity.jpg', 'Сколько комплектов вы хотите заказать?', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(qty_1|qty_2|cancel_order)$/);
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'cancel_order') {
+        await ctx.reply('Заказ отменен.');
+        return;
+      }
+      quantity = cbCtx.callbackQuery.data === 'qty_1' ? 1 : 2;
+      totalPrice = quantity === 1 ? price1 : price2;
+      step = 'model';
+      currentItem = 0;
+    }
+    
+    else if (step === 'model') {
+      await ctx.reply(`🛠 Сборка комплекта №${currentItem + 1}`);
+      const kb = new InlineKeyboard();
+      MODELS.forEach(m => kb.text(m.name, `model_${m.id}`).row());
+      if (currentItem === 0) kb.text('🔙 Назад', 'back_qty');
+      else kb.text('🔙 Назад к пред. комплекту', 'back_prev_item');
 
-      // --- Bublik Volume ---
-      const volumeKeyboard = new InlineKeyboard();
+      await safeReplyWithPhoto(ctx, 'step_model', 'models.jpg', 'Выберите модель миски:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(model_|back_)/);
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_qty') { step = 'qty'; continue; }
+      if (cbCtx.callbackQuery.data === 'back_prev_item') {
+        currentItem = 0;
+        step = items[0].modelId === 'bublik' ? 'bublik_color' : 'lemon_bot';
+        continue;
+      }
+
+      items[currentItem].modelId = cbCtx.callbackQuery.data.replace('model_', '');
+      items[currentItem].model = MODELS.find(m => m.id === items[currentItem].modelId)!.name;
+      step = items[currentItem].modelId === 'bublik' ? 'bublik_height' : 'lemon_size';
+    }
+
+    else if (step === 'bublik_height') {
+      const kb = new InlineKeyboard();
+      BUBLIK_HEIGHTS.forEach(h => kb.text(h.name, `height_${h.id}`).row());
+      kb.text('🔙 Назад', 'back_model');
+
+      await safeReplyWithPhoto(ctx, 'step_bublik_height', 'bublik_height.jpg', 'Выберите высоту подставки:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(height_|back_)/);
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_model') { step = 'model'; continue; }
+
+      items[currentItem].heightId = cbCtx.callbackQuery.data.replace('height_', '');
+      items[currentItem].height = BUBLIK_HEIGHTS.find(h => h.id === items[currentItem].heightId)!.name;
+      step = 'bublik_volume';
+    }
+
+    else if (step === 'bublik_volume') {
+      const kb = new InlineKeyboard();
       BUBLIK_VOLUMES.forEach(v => {
-        if (v.id === '1700' && heightId === '5rings') return; // exclude 1700 for 5 rings
-        volumeKeyboard.text(v.name, `volume_${v.id}`).row();
+        if (v.id === '1700' && items[currentItem].heightId === '5rings') return;
+        kb.text(v.name, `volume_${v.id}`).row();
       });
-      await safeReplyWithPhoto(ctx, 'step_bublik_volume', 'bublik_volume.jpg', 'Выберите объём чаши:', volumeKeyboard);
-      const volumeCtx = await conversation.waitForCallbackQuery(/^volume_/, {
-        otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите объём.'); },
-      });
-      const volumeId = volumeCtx.callbackQuery.data.replace('volume_', '');
-      const volume = BUBLIK_VOLUMES.find(v => v.id === volumeId)!;
-      await volumeCtx.answerCallbackQuery();
-      await volumeCtx.editMessageCaption({ caption: `✅ Объём: ${volume.name}` }).catch(()=>volumeCtx.editMessageText(`✅ Объём: ${volume.name}`));
+      kb.text('🔙 Назад', 'back_height');
 
-      // --- Bublik Color ---
-      const colorKeyboard = new InlineKeyboard();
-      let rowCount = 0;
+      await safeReplyWithPhoto(ctx, 'step_bublik_volume', 'bublik_volume.jpg', 'Выберите объём чаши:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(volume_|back_)/);
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_height') { step = 'bublik_height'; continue; }
+
+      items[currentItem].volumeId = cbCtx.callbackQuery.data.replace('volume_', '');
+      items[currentItem].volume = BUBLIK_VOLUMES.find(v => v.id === items[currentItem].volumeId)!.name;
+      step = 'bublik_color';
+    }
+
+    else if (step === 'bublik_color') {
+      const kb = new InlineKeyboard();
+      let rc = 0;
       colors.forEach(c => {
-        if (c.available) {
-          colorKeyboard.text(c.name, `color_${c.id}`);
-        } else {
-          colorKeyboard.text(`⛔ ${c.name}`, 'color_unav');
-        }
-        rowCount++;
-        if (rowCount % 2 === 0) colorKeyboard.row();
+        if (c.available) kb.text(c.name, `color_${c.id}`);
+        else kb.text(`⛔ ${c.name}`, 'color_unav');
+        rc++;
+        if (rc % 2 === 0) kb.row();
       });
+      kb.row().text('🔙 Назад', 'back_volume');
 
-      await safeReplyWithPhoto(ctx, 'step_palette', 'palette.jpg', 'Выберите цвет комплекта:', colorKeyboard);
-      let colorId = '';
-      while (true) {
-        const colorCtx = await conversation.waitForCallbackQuery(/^(color_|color_unav)/, {
-          otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите цвет.'); },
-        });
-        if (colorCtx.callbackQuery.data === 'color_unav') {
-          await colorCtx.answerCallbackQuery('Этот цвет временно недоступен 😔');
-          continue;
-        }
-        colorId = colorCtx.callbackQuery.data.replace('color_', '');
-        await colorCtx.answerCallbackQuery();
-        const colorName = colors.find(c => c.id === colorId)!.name;
-        await colorCtx.editMessageCaption({ caption: `✅ Цвет: ${colorName}` }).catch(()=>colorCtx.editMessageText(`✅ Цвет: ${colorName}`));
-        break;
+      await safeReplyWithPhoto(ctx, 'step_palette', 'palette.jpg', 'Выберите цвет комплекта:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(color_|color_unav|back_)/);
+      if (cbCtx.callbackQuery.data === 'color_unav') {
+        await cbCtx.answerCallbackQuery('Этот цвет недоступен 😔');
+        continue;
       }
-      const color = colors.find(c => c.id === colorId)!;
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_volume') { step = 'bublik_volume'; continue; }
 
-      items.push({
-        model: model.name,
-        height: height.name,
-        volume: volume.name,
-        color: color.name
-      });
-    } else {
-      // --- Lemon Size ---
-      const sizeKeyboard = new InlineKeyboard();
-      LEMON_SIZES.forEach(s => sizeKeyboard.text(s.name, `size_${s.id}`).row());
-      await safeReplyWithPhoto(ctx, 'step_lemon_size', 'lemon_size.jpg', 'Выберите размер (высота + объём):', sizeKeyboard);
-      const sizeCtx = await conversation.waitForCallbackQuery(/^size_/, {
-        otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите размер.'); },
-      });
-      const sizeId = sizeCtx.callbackQuery.data.replace('size_', '');
-      const size = LEMON_SIZES.find(s => s.id === sizeId)!;
-      await sizeCtx.answerCallbackQuery();
-      await sizeCtx.editMessageCaption({ caption: `✅ Размер: ${size.name}` }).catch(()=>sizeCtx.editMessageText(`✅ Размер: ${size.name}`));
-
-      const createColorKeyboard = (prefix: string) => {
-        const kb = new InlineKeyboard();
-        let rc = 0;
-        colors.forEach(c => {
-          if (c.available) {
-            kb.text(c.name, `${prefix}_${c.id}`);
-          } else {
-            kb.text(`⛔ ${c.name}`, `${prefix}_unav`);
-          }
-          rc++;
-          if (rc % 2 === 0) kb.row();
-        });
-        return kb;
-      };
-
-      // --- Lemon Top Color ---
-      await safeReplyWithPhoto(ctx, 'step_lemon_top_color', 'palette.jpg', 'Выберите цвет ВЕРХА:', createColorKeyboard('top'));
-      let topColorId = '';
-      while (true) {
-        const topColorCtx = await conversation.waitForCallbackQuery(/^(top_.+|top_unav)$/, {
-          otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите цвет верха.'); },
-        });
-        if (topColorCtx.callbackQuery.data === 'top_unav') {
-          await topColorCtx.answerCallbackQuery('Этот цвет временно недоступен 😔');
-          continue;
-        }
-        topColorId = topColorCtx.callbackQuery.data.replace('top_', '');
-        await topColorCtx.answerCallbackQuery();
-        const colorName = colors.find(c => c.id === topColorId)!.name;
-        await topColorCtx.editMessageCaption({ caption: `✅ Цвет верха: ${colorName}` }).catch(()=>topColorCtx.editMessageText(`✅ Цвет верха: ${colorName}`));
-        break;
-      }
-      const topColor = colors.find(c => c.id === topColorId)!;
-
-      // --- Lemon Bottom Color ---
-      await safeReplyWithPhoto(ctx, 'step_lemon_bot_color', 'palette.jpg', 'Выберите цвет НИЗА:', createColorKeyboard('bot'));
-      let botColorId = '';
-      while (true) {
-        const botColorCtx = await conversation.waitForCallbackQuery(/^(bot_.+|bot_unav)$/, {
-          otherwise: async (ctx) => { await ctx.reply('Пожалуйста, выберите цвет низа.'); },
-        });
-        if (botColorCtx.callbackQuery.data === 'bot_unav') {
-          await botColorCtx.answerCallbackQuery('Этот цвет временно недоступен 😔');
-          continue;
-        }
-        botColorId = botColorCtx.callbackQuery.data.replace('bot_', '');
-        await botColorCtx.answerCallbackQuery();
-        const colorName = colors.find(c => c.id === botColorId)!.name;
-        await botColorCtx.editMessageCaption({ caption: `✅ Цвет низа: ${colorName}` }).catch(()=>botColorCtx.editMessageText(`✅ Цвет низа: ${colorName}`));
-        break;
-      }
-      const botColor = colors.find(c => c.id === botColorId)!;
-
-      items.push({
-        model: model.name,
-        size: size.name,
-        topColor: topColor.name,
-        bottomColor: botColor.name
-      });
-    }
-  }
-
-  // --- Summary ---
-  await ctx.reply('⏳ Формируем заказ и подготавливаем описание...');
-  
-  let summaryText = `🐾 Ваш заказ:\n\n`;
-  items.forEach((item, index) => {
-    summaryText += `🔹 Комплект ${index + 1}:\n`;
-    if (item.model === 'Бублик') {
-      summaryText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n\n`;
-    } else {
-      summaryText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n\n`;
-    }
-  });
-
-  // Call Gemini for descriptions
-  const orderDescription = await generateOrderDescription(items);
-  summaryText += `✨ ${orderDescription}\n\n`;
-  summaryText += `💰 Итого к оплате: ${totalPrice} ₽`;
-
-  const orderId = crypto.randomBytes(4).toString('hex');
-  const userId = ctx.from?.id!;
-  const username = ctx.from?.username;
-
-  createOrder({
-    id: orderId,
-    userId,
-    username,
-    totalPrice,
-    itemsJson: JSON.stringify(items),
-  });
-
-  const paymentMode = getSetting('payment_mode', 'yookassa');
-  
-  if (paymentMode === 'manual') {
-    const manualDetails = getSetting('manual_payment_details', 'Реквизиты для перевода пока не указаны.');
-    summaryText += `\n\n💳 **Реквизиты для перевода:**\n${manualDetails}`;
-    
-    const paymentKeyboard = new InlineKeyboard()
-      .text('Я оплатил ✅', `manual_paid_${orderId}`).row()
-      .text('Изменить заказ', 'restart_order');
+      items[currentItem].colorId = cbCtx.callbackQuery.data.replace('color_', '');
+      items[currentItem].color = colors.find(c => c.id === items[currentItem].colorId)!.name;
       
-    await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, paymentKeyboard);
-  } else {
-    const me = await ctx.api.getMe();
-    const { url: paymentUrl, paymentId } = await createPayment({
-      id: orderId,
-      userId,
-      username,
-      model: quantity > 1 ? 'Сборный заказ (2 шт)' : items[0].model,
-      height: items[0].height || items[0].size || '',
-      volume: items[0].volume || '',
-      color: items[0].color || `${items[0].topColor}/${items[0].bottomColor}`,
-      totalPrice,
-      status: 'pending'
-    }, me.username);
-  
-    const paymentKeyboard = new InlineKeyboard()
-      .url(`Оплатить ${totalPrice} ₽`, paymentUrl).row()
-      .text('Я оплатил ✅', `check_payment_${paymentId}_${orderId}`).row()
-      .text('Изменить заказ', 'restart_order');
-  
-    await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, paymentKeyboard);
+      if (currentItem === 0 && quantity === 2) {
+        currentItem = 1; step = 'model';
+      } else {
+        step = 'summary';
+      }
+    }
+
+    else if (step === 'lemon_size') {
+      const kb = new InlineKeyboard();
+      LEMON_SIZES.forEach(s => kb.text(s.name, `size_${s.id}`).row());
+      kb.text('🔙 Назад', 'back_model');
+
+      await safeReplyWithPhoto(ctx, 'step_lemon_size', 'lemon_size.jpg', 'Выберите размер (высота + объём):', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(size_|back_)/);
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_model') { step = 'model'; continue; }
+
+      items[currentItem].sizeId = cbCtx.callbackQuery.data.replace('size_', '');
+      items[currentItem].size = LEMON_SIZES.find(s => s.id === items[currentItem].sizeId)!.name;
+      step = 'lemon_top';
+    }
+
+    else if (step === 'lemon_top') {
+      const kb = new InlineKeyboard();
+      let rc = 0;
+      colors.forEach(c => {
+        if (c.available) kb.text(c.name, `top_${c.id}`);
+        else kb.text(`⛔ ${c.name}`, 'top_unav');
+        rc++;
+        if (rc % 2 === 0) kb.row();
+      });
+      kb.row().text('🔙 Назад', 'back_size');
+
+      await safeReplyWithPhoto(ctx, 'step_lemon_top_color', 'palette.jpg', 'Выберите цвет ВЕРХА:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(top_|top_unav|back_)/);
+      if (cbCtx.callbackQuery.data === 'top_unav') {
+        await cbCtx.answerCallbackQuery('Этот цвет недоступен 😔');
+        continue;
+      }
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_size') { step = 'lemon_size'; continue; }
+
+      items[currentItem].topColorId = cbCtx.callbackQuery.data.replace('top_', '');
+      items[currentItem].topColor = colors.find(c => c.id === items[currentItem].topColorId)!.name;
+      step = 'lemon_bot';
+    }
+
+    else if (step === 'lemon_bot') {
+      const kb = new InlineKeyboard();
+      let rc = 0;
+      colors.forEach(c => {
+        if (c.available) kb.text(c.name, `bot_${c.id}`);
+        else kb.text(`⛔ ${c.name}`, 'bot_unav');
+        rc++;
+        if (rc % 2 === 0) kb.row();
+      });
+      kb.row().text('🔙 Назад', 'back_top');
+
+      await safeReplyWithPhoto(ctx, 'step_lemon_bot_color', 'palette.jpg', 'Выберите цвет НИЗА:', kb);
+      const cbCtx = await conversation.waitForCallbackQuery(/^(bot_|bot_unav|back_)/);
+      if (cbCtx.callbackQuery.data === 'bot_unav') {
+        await cbCtx.answerCallbackQuery('Этот цвет недоступен 😔');
+        continue;
+      }
+      await cbCtx.deleteMessage().catch(()=>null);
+      if (cbCtx.callbackQuery.data === 'back_top') { step = 'lemon_top'; continue; }
+
+      items[currentItem].botColorId = cbCtx.callbackQuery.data.replace('bot_', '');
+      items[currentItem].bottomColor = colors.find(c => c.id === items[currentItem].botColorId)!.name;
+      
+      if (currentItem === 0 && quantity === 2) {
+        currentItem = 1; step = 'model';
+      } else {
+        step = 'summary';
+      }
+    }
+
+    else if (step === 'summary') {
+      await ctx.reply('⏳ Формируем заказ и подготавливаем описание...');
+      
+      let summaryText = `🐾 Ваш заказ:\n\n`;
+      const finalItems = items.slice(0, quantity);
+      finalItems.forEach((item, index) => {
+        summaryText += `🔹 Комплект ${index + 1}:\n`;
+        if (item.modelId === 'bublik') {
+          summaryText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n\n`;
+        } else {
+          summaryText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n\n`;
+        }
+      });
+
+      const orderDescription = await generateOrderDescription(finalItems);
+      summaryText += `✨ ${orderDescription}\n\n`;
+      summaryText += `💰 Итого к оплате: ${totalPrice} ₽`;
+
+      const orderId = crypto.randomBytes(4).toString('hex');
+      const userId = ctx.from?.id!;
+      const username = ctx.from?.username;
+
+      createOrder({
+        id: orderId,
+        userId,
+        username,
+        totalPrice,
+        itemsJson: JSON.stringify(finalItems),
+      });
+
+      const paymentMode = getSetting('payment_mode', 'yookassa');
+      
+      if (paymentMode === 'manual') {
+        const manualDetails = getSetting('manual_payment_details', 'Реквизиты для перевода пока не указаны.');
+        summaryText += `\n\n💳 **Реквизиты для перевода:**\n${manualDetails}`;
+        
+        const kb = new InlineKeyboard()
+          .text('Я оплатил ✅', `manual_paid_${orderId}`).row()
+          .text('Изменить заказ', 'restart_order');
+          
+        await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, kb);
+      } else {
+        const me = await ctx.api.getMe();
+        const { url: paymentUrl, paymentId } = await createPayment({
+          id: orderId,
+          userId,
+          username,
+          model: quantity > 1 ? 'Сборный заказ (2 шт)' : finalItems[0].model,
+          height: finalItems[0].height || finalItems[0].size || '',
+          volume: finalItems[0].volume || '',
+          color: finalItems[0].color || `${finalItems[0].topColor}/${finalItems[0].bottomColor}`,
+          totalPrice,
+          status: 'pending'
+        }, me.username);
+      
+        const kb = new InlineKeyboard()
+          .url(`Оплатить ${totalPrice} ₽`, paymentUrl).row()
+          .text('Я оплатил ✅', `check_payment_${paymentId}_${orderId}`).row()
+          .text('Изменить заказ', 'restart_order');
+      
+        await safeReplyWithPhoto(ctx, 'step_summary', 'summary.jpg', summaryText, kb);
+      }
+      return; // End of conversation
+    }
   }
 }

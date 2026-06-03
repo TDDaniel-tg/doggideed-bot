@@ -18,12 +18,14 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "googleapis": "^171.4.0",
-    "grammy": "^1.43.0"
+    "grammy": "^1.43.0",
+    "pg": "^8.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
+    "@types/pg": "^8.20.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }

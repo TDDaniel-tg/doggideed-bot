@@ -170,21 +170,42 @@ export async function adminEditContentScene(conversation: MyConversation, ctx: M
     newText = textResponse.message?.text?.trim() || '';
   }
 
-  await ctx.reply('📸 Отправьте фотографию для этого этапа:', {
-    reply_markup: new InlineKeyboard().text('Отмена', 'admin_cancel_scene').row().text('Пропустить (оставить текущее)', 'skip_photo')
+  await ctx.reply('📸 Отправьте одну или несколько фотографий для этого этапа.\nКогда закончите, нажмите "Завершить загрузку".\nЕсли фото менять не нужно, нажмите "Пропустить".', {
+    reply_markup: new InlineKeyboard().text('Отмена', 'admin_cancel_scene').row().text('Пропустить (оставить текущее)', 'skip_photo').row().text('✅ Завершить загрузку фото', 'finish_photo')
   });
 
-  const photoResponse = await conversation.waitFor(['message:photo', 'callback_query:data']);
-  if (photoResponse.callbackQuery?.data === 'admin_cancel_scene') {
-    await ctx.reply('Отменено.', { reply_markup: new InlineKeyboard().text('В админку', 'admin_main') });
-    return;
-  }
-  let newPhotoId = currentBlock?.photo_id;
-  if (photoResponse.callbackQuery?.data !== 'skip_photo') {
+  let photoIds: string[] = [];
+  let skippedPhotos = false;
+  while (true) {
+    const photoResponse = await conversation.waitFor(['message:photo', 'callback_query:data']);
+    if (photoResponse.callbackQuery?.data === 'admin_cancel_scene') {
+      await ctx.reply('Отменено.', { reply_markup: new InlineKeyboard().text('В админку', 'admin_main') });
+      return;
+    }
+    if (photoResponse.callbackQuery?.data === 'skip_photo') {
+      skippedPhotos = true;
+      await photoResponse.answerCallbackQuery('Пропущено');
+      break;
+    }
+    if (photoResponse.callbackQuery?.data === 'finish_photo') {
+      await photoResponse.answerCallbackQuery('Завершено');
+      break;
+    }
     const photos = photoResponse.message?.photo;
     if (photos && photos.length > 0) {
-      newPhotoId = photos[photos.length - 1].file_id;
+      photoIds.push(photos[photos.length - 1].file_id);
+    } else if (photoResponse.message) {
+      await ctx.reply('Пожалуйста, отправьте фотографию или нажмите "Завершить загрузку фото".');
     }
+  }
+
+  let newPhotoId = currentBlock?.photo_id;
+  if (!skippedPhotos && photoIds.length > 0) {
+    newPhotoId = photoIds.join(',');
+  } else if (!skippedPhotos && photoIds.length === 0) {
+    // They didn't skip, but also didn't upload any photos, let's keep current or set null
+    // To allow removing photo, we can just set it to null
+    newPhotoId = undefined;
   }
 
   await ctx.reply('🔗 Отправьте текст для кнопки-ссылки (если не нужна - нажмите "Пропустить"):', {
