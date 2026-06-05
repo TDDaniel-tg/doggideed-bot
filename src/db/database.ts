@@ -16,6 +16,7 @@ export interface Order {
   itemsJson?: string;
   totalPrice: number;
   status: string;
+  bowlName?: string;
 }
 
 export interface ContentBlock {
@@ -52,6 +53,7 @@ export async function initDB() {
       items_json TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS bowl_name TEXT;
     CREATE TABLE IF NOT EXISTS catalog_overrides (
       type TEXT,
       item_id TEXT,
@@ -90,7 +92,7 @@ export async function initDB() {
     const o = {
       id: r.id, userId: Number(r.user_id), username: r.username, model: r.model,
       height: r.height, volume: r.volume, color: r.color, itemsJson: r.items_json,
-      totalPrice: r.total_price, status: r.status
+      totalPrice: r.total_price, status: r.status, bowlName: r.bowl_name
     };
     cache.orders.set(r.id, o);
     cache.ordersArray.push(o);
@@ -121,15 +123,16 @@ export function createOrder(order: Partial<Order>) {
   const o = {
     id: order.id!, userId: order.userId!, username: order.username, model: order.model || '',
     height: order.height, volume: order.volume, color: order.color, itemsJson: order.itemsJson,
-    totalPrice: order.totalPrice || 0, status: order.status || 'pending'
+    totalPrice: order.totalPrice || 0, status: order.status || 'pending',
+    bowlName: order.bowlName
   };
   cache.orders.set(o.id, o);
   cache.ordersArray.push(o);
 
   pool.query(`
-    INSERT INTO orders (id, user_id, username, model, height, volume, color, total_price, items_json)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-  `, [o.id, o.userId, o.username, o.model, o.height, o.volume, o.color, o.totalPrice, o.itemsJson]).catch(console.error);
+    INSERT INTO orders (id, user_id, username, model, height, volume, color, total_price, items_json, bowl_name)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  `, [o.id, o.userId, o.username, o.model, o.height, o.volume, o.color, o.totalPrice, o.itemsJson, o.bowlName]).catch(console.error);
 }
 
 export function getOrder(id: string): Order | undefined {

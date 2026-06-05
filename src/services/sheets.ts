@@ -28,8 +28,9 @@ export async function appendToSheet(order: Order) {
         const items = JSON.parse(order.itemsJson);
         modelDisplay = `${items.length} шт.`;
         detailsDisplay = items.map((i: any, idx: number) => {
-          if (i.model === 'Бублик') return `${idx+1}) Бублик: ${i.height}, ${i.volume}, ${i.color}`;
-          return `${idx+1}) Лимон: ${i.size}, ${i.topColor}/${i.bottomColor}`;
+          const namePart = ` (Имя: ${i.bowlName || 'Без имени'})`;
+          if (i.model === 'Бублик') return `${idx+1}) Бублик: ${i.height}, ${i.volume}, ${i.color}${namePart}`;
+          return `${idx+1}) Лимон: ${i.size}, ${i.topColor}/${i.bottomColor}${namePart}`;
         }).join(' | ');
       } catch(e) {}
     }

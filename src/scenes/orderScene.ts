@@ -25,17 +25,17 @@ async function safeReplyWithPhoto(ctx: MyContext, stepId: string, defaultPhotoNa
     const photoIds = block.photo_id.split(',');
     try {
       if (photoIds.length > 1) {
-        await ctx.replyWithMediaGroup(
+        const mediaMsgs = await ctx.replyWithMediaGroup(
           photoIds.map(id => ({
             type: 'photo',
             media: id
           }))
         );
-        await ctx.reply(text, { reply_markup: finalReplyMarkup });
-        return;
+        const textMsg = await ctx.reply(text, { reply_markup: finalReplyMarkup });
+        return { mediaMsgs, textMsg };
       } else {
-        await ctx.replyWithPhoto(photoIds[0], { caption: text, reply_markup: finalReplyMarkup });
-        return;
+        const textMsg = await ctx.replyWithPhoto(photoIds[0], { caption: text, reply_markup: finalReplyMarkup });
+        return { textMsg };
       }
     } catch (e) {
       console.error(`Failed to send custom photo ${block.photo_id} for step ${stepId}`);
@@ -45,12 +45,15 @@ async function safeReplyWithPhoto(ctx: MyContext, stepId: string, defaultPhotoNa
   const photoPath = path.resolve(process.cwd(), 'src/assets/images', defaultPhotoName);
   try {
     if (fs.existsSync(photoPath)) {
-      await ctx.replyWithPhoto(new InputFile(photoPath), { caption: text, reply_markup: finalReplyMarkup });
+      const textMsg = await ctx.replyWithPhoto(new InputFile(photoPath), { caption: text, reply_markup: finalReplyMarkup });
+      return { textMsg };
     } else {
-      await ctx.reply(text, { reply_markup: finalReplyMarkup });
+      const textMsg = await ctx.reply(text, { reply_markup: finalReplyMarkup });
+      return { textMsg };
     }
   } catch (e) {
-    await ctx.reply(text, { reply_markup: finalReplyMarkup });
+    const textMsg = await ctx.reply(text, { reply_markup: finalReplyMarkup });
+    return { textMsg };
   }
 }
 
@@ -58,7 +61,7 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
   const { price1, price2 } = getSetPrices();
   const colors = getMergedColors();
 
-  type Step = 'qty' | 'model' | 'bublik_height' | 'bublik_volume' | 'bublik_color' | 'lemon_size' | 'lemon_top' | 'lemon_bot' | 'summary';
+  type Step = 'qty' | 'model' | 'bublik_height' | 'bublik_volume' | 'bublik_color' | 'lemon_size' | 'lemon_top' | 'lemon_bot' | 'bowl_name' | 'summary';
   
   let step: Step = 'qty';
   let currentItem = 0;
@@ -166,7 +169,8 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       if (currentItem === 0 && quantity === 2) {
         currentItem = 1; step = 'model';
       } else {
-        step = 'summary';
+        step = 'bowl_name';
+        currentItem = 0;
       }
     }
 
@@ -236,6 +240,84 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       if (currentItem === 0 && quantity === 2) {
         currentItem = 1; step = 'model';
       } else {
+        step = 'bowl_name';
+        currentItem = 0;
+      }
+    }
+
+    else if (step === 'bowl_name') {
+      const kb = new InlineKeyboard()
+        .text('Без имени 🚫', 'skip_bowl_name').row()
+        .text('🔙 Назад', 'back_bowl_selection');
+
+      const sentMsg = await safeReplyWithPhoto(
+        ctx,
+        'step_bowl_name',
+        'bowl_name.jpg',
+        `Введите имя, которое будет отображено на миске №${currentItem + 1} (или нажмите "Без имени"):`,
+        kb
+      );
+
+      const response = await conversation.waitFor(['message:text', 'callback_query:data']);
+      
+      if (response.callbackQuery?.data === 'back_bowl_selection') {
+        await response.deleteMessage().catch(() => null);
+        if (sentMsg?.mediaMsgs) {
+          for (const m of sentMsg.mediaMsgs) {
+            await ctx.api.deleteMessage(ctx.chat!.id, m.message_id).catch(() => null);
+          }
+        }
+        if (currentItem === 1) {
+          currentItem = 0;
+          // stay at step = 'bowl_name'
+        } else {
+          // currentItem === 0
+          if (quantity === 2) {
+            currentItem = 1;
+            step = items[1].modelId === 'bublik' ? 'bublik_color' : 'lemon_bot';
+          } else {
+            currentItem = 0;
+            step = items[0].modelId === 'bublik' ? 'bublik_color' : 'lemon_bot';
+          }
+        }
+        continue;
+      }
+
+      let bowlName = '';
+      if (response.callbackQuery?.data === 'skip_bowl_name') {
+        await response.answerCallbackQuery('Без имени');
+        await response.deleteMessage().catch(() => null);
+        if (sentMsg?.mediaMsgs) {
+          for (const m of sentMsg.mediaMsgs) {
+            await ctx.api.deleteMessage(ctx.chat!.id, m.message_id).catch(() => null);
+          }
+        }
+        bowlName = 'Без имени';
+      } else {
+        const text = response.message?.text?.trim() || '';
+        if (!text) {
+          await ctx.reply('Пожалуйста, введите имя текстом или нажмите кнопку "Без имени".');
+          continue;
+        }
+        bowlName = text;
+        
+        // Clean up the bot keyboard and media group messages
+        if (sentMsg?.textMsg) {
+          await ctx.api.deleteMessage(ctx.chat!.id, sentMsg.textMsg.message_id).catch(() => null);
+        }
+        if (sentMsg?.mediaMsgs) {
+          for (const m of sentMsg.mediaMsgs) {
+            await ctx.api.deleteMessage(ctx.chat!.id, m.message_id).catch(() => null);
+          }
+        }
+      }
+
+      items[currentItem].bowlName = bowlName;
+
+      if (currentItem === 0 && quantity === 2) {
+        currentItem = 1;
+        // stay at step = 'bowl_name'
+      } else {
         step = 'summary';
       }
     }
@@ -248,10 +330,11 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       finalItems.forEach((item, index) => {
         summaryText += `🔹 Комплект ${index + 1}:\n`;
         if (item.modelId === 'bublik') {
-          summaryText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n\n`;
+          summaryText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n`;
         } else {
-          summaryText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n\n`;
+          summaryText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n`;
         }
+        summaryText += `Имя на миске: ${item.bowlName || 'Без имени'}\n\n`;
       });
 
       const orderDescription = await generateOrderDescription(finalItems);
@@ -262,12 +345,15 @@ export async function orderScene(conversation: MyConversation, ctx: MyContext) {
       const userId = ctx.from?.id!;
       const username = ctx.from?.username;
 
+      const bowlNames = finalItems.map(item => item.bowlName).filter(Boolean).join(', ');
+
       createOrder({
         id: orderId,
         userId,
         username,
         totalPrice,
         itemsJson: JSON.stringify(finalItems),
+        bowlName: bowlNames || 'Без имени'
       });
 
       const paymentMode = getSetting('payment_mode', 'yookassa');

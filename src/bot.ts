@@ -73,10 +73,11 @@ bot.callbackQuery(/^check_payment_(.+)_(.+)$/, async (ctx) => {
           items.forEach((item: any, index: number) => {
             notificationText += `Комплект ${index + 1}:\n`;
             if (item.model === 'Бублик') {
-              notificationText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n\n`;
+              notificationText += `Модель: Бублик\nВысота: ${item.height}\nОбъём: ${item.volume}\nЦвет: ${item.color}\n`;
             } else {
-              notificationText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n\n`;
+              notificationText += `Модель: Как у Лимона\nРазмер: ${item.size}\nВерх: ${item.topColor}\nНиз: ${item.bottomColor}\n`;
             }
+            notificationText += `Имя на миске: ${item.bowlName || 'Без имени'}\n\n`;
           });
         } catch(e) {}
       } else {

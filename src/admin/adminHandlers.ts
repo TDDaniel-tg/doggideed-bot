@@ -68,6 +68,7 @@ function buildContentKeyboard() {
     { id: 'step_lemon_size', name: 'Лимон: Размер' },
     { id: 'step_lemon_top_color', name: 'Лимон: Цвет верха' },
     { id: 'step_lemon_bot_color', name: 'Лимон: Цвет низа' },
+    { id: 'step_bowl_name', name: 'Шаг: Имя на миске' },
     { id: 'step_summary', name: 'Финальный шаг: Оплата' },
   ];
   
